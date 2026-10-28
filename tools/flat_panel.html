@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Flat Panel</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #fff; }
+  body { cursor: default; touch-action: none; user-select: none; -webkit-user-select: none; }
+  body.hidecursor { cursor: none; }
+  #help {
+    position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
+    max-width: calc(100% - 32px); box-sizing: border-box;
+    font: 15px/1.45 system-ui, sans-serif; color: #fff; background: rgba(0,0,0,.78);
+    padding: 12px 16px; border-radius: 10px; transition: opacity .6s; text-align: center;
+  }
+  #help.gone { opacity: 0; pointer-events: none; }
+  #help b { font-variant-numeric: tabular-nums; }
+  #help .row { display: flex; gap: 8px; justify-content: center; margin-top: 8px; flex-wrap: wrap; }
+  #help button {
+    font: inherit; padding: 8px 14px; border-radius: 8px; border: 0;
+    background: #fff; color: #000; min-width: 44px; min-height: 44px;
+  }
+</style>
+</head>
+<body>
+<div id="help">
+  Level <b id="lvl">100</b>% &nbsp;·&nbsp; ↑/↓ or +/− change &nbsp;·&nbsp; F or double-tap: full screen &nbsp;·&nbsp; H: hide this
+  <div class="row">
+    <button id="dn" aria-label="Dimmer">−</button>
+    <button id="up" aria-label="Brighter">+</button>
+    <button id="fs">Full screen</button>
+  </div>
+</div>
+<script>
+// Full-screen white for telescope flats. Keep the device backlight at MAX and dim here instead:
+// a dimmed backlight usually flickers (PWM) and makes bands in short rolling-shutter exposures.
+const STEPS = [100, 80, 60, 50, 40, 30, 25, 20, 15, 10, 7, 5, 3, 2, 1];
+let i = 0;
+try { const s = localStorage.getItem("flatLevel"); if (s !== null) i = Math.max(0, STEPS.indexOf(+s)); } catch (e) {}
+
+const help = document.getElementById("help");
+const lvl = document.getElementById("lvl");
+
+function apply() {
+  const v = Math.round(255 * STEPS[i] / 100);
+  document.documentElement.style.background = document.body.style.background = `rgb(${v},${v},${v})`;
+  lvl.textContent = STEPS[i];
+  try { localStorage.setItem("flatLevel", STEPS[i]); } catch (e) {}
+}
+function brighter() { i = Math.max(0, i - 1); apply(); poke(); }
+function dimmer() { i = Math.min(STEPS.length - 1, i + 1); apply(); poke(); }
+function toggleFs() {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else document.documentElement.requestFullscreen?.().catch(() => {});
+}
+
+// hide the help and cursor after a few seconds of no input
+let timer;
+function poke() {
+  help.classList.remove("gone"); document.body.classList.remove("hidecursor");
+  clearTimeout(timer);
+  timer = setTimeout(() => { help.classList.add("gone"); document.body.classList.add("hidecursor"); }, 3000);
+}
+
+document.getElementById("up").onclick = (e) => { e.stopPropagation(); brighter(); };
+document.getElementById("dn").onclick = (e) => { e.stopPropagation(); dimmer(); };
+document.getElementById("fs").onclick = (e) => { e.stopPropagation(); toggleFs(); };
+document.addEventListener("keydown", (e) => {
+  if (e.key === "ArrowUp" || e.key === "+" || e.key === "=") brighter();
+  else if (e.key === "ArrowDown" || e.key === "-") dimmer();
+  else if (e.key === "f" || e.key === "F") toggleFs();
+  else if (e.key === "h" || e.key === "H") { clearTimeout(timer); help.classList.add("gone"); document.body.classList.add("hidecursor"); }
+  else poke();
+});
+document.addEventListener("dblclick", toggleFs);
+document.addEventListener("mousemove", poke);
+document.addEventListener("pointerdown", poke);
+
+// keep the screen from sleeping during a flat run (where the browser allows it)
+let lock = null;
+async function wake() { try { lock = await navigator.wakeLock?.request("screen"); } catch (e) {} }
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") wake(); });
+wake();
+
+apply(); poke();
+</script>
+</body>
+</html>

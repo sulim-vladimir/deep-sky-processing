@@ -1,0 +1,15 @@
+# image data and processing output never go in the repo
+*.fit
+*.fits
+*.fts
+*.png
+*.jpg
+*.tif
+*.tiff
+*.seq
+*.log
+work/
+*_gaia.csv
+.venv/
+__pycache__/
+*.pyc
