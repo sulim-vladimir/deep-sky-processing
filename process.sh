@@ -32,7 +32,8 @@ source "$CONF"
 : "${FOCAL:=750}" "${PIXEL:=2.9}"
 : "${CROP:=40 40 1856 1016}"                 # x y w h after registration (1936 x 1096 frames)
 : "${KEEP_BEST:=90%}"                        # frames kept by weighted FWHM
-: "${WCS_FROM:=}"                            # solved image of the same field, if the online solver is down
+: "${SOLVE:=online}"                         # online = Siril/VizieR first, then offline; offline = astrometry.net only
+: "${WCS_FROM:=}"                            # last resort: a solved image of the same field (copies its WCS)
 : "${DECONV_ITERS:=20}" "${DECONV_TV:=0.002}" "${DECONV_MINOR:=$MINOR}"
 : "${DENOISE_MOD:=0.7}"
 : "${STRETCH_OPTS:=--lumsmooth=0 --black=4 --sky=0.13 --bg=flat --skydn=1.0 --skychroma=3 --skyflat=0.15}"
@@ -143,9 +144,14 @@ load ${NAME}_linear
 platesolve $RA $DEC -focal=$FOCAL -pixelsize=$PIXEL -force
 save ${NAME}_linear
 EOF
-    echo "--- Siril: 3_solve"
-    if "$SIRIL" siril-cli -s "$S/3_solve.ssf" > "$S/3_solve.log" 2>&1; then
+    echo "--- plate solve ($SOLVE)"
+    [ "$SOLVE" = offline ] && echo "online solve skipped (SOLVE=offline)" > "$S/3_solve.log"
+    if [ "$SOLVE" != offline ] && "$SIRIL" siril-cli -s "$S/3_solve.ssf" > "$S/3_solve.log" 2>&1; then
         grep -E 'Resolution:|Image center' "$S/3_solve.log" || true
+    elif echo "--- astrometry.net offline ($(grep -o -m1 -E 'skipped|libcurl error[^.]*|HTTP code [0-9]+|could not be aligned' "$S/3_solve.log"))" &&
+         py "$REPO/scripts/solve_local.py" "$WORK/${NAME}_linear.fits" "$RA" "$DEC" \
+            "$(awk "BEGIN {printf \"%.3f\", 206.265 * $PIXEL / $FOCAL}")" 2>&1 | grep -v -i warn | tail -3; then
+        :   # solved offline (pipefail: the pipeline fails when solve_local.py does)
     elif [ -n "$WCS_FROM" ]; then
         echo "plate solve failed ($(grep -o -m1 -E 'libcurl error[^.]*|HTTP code [0-9]+|could not be aligned' "$S/3_solve.log")) -> WCS copied from $WCS_FROM"
         py "$REPO/scripts/align_wcs.py" "$WCS_FROM" "$WORK/${NAME}_linear.fits" "$WORK/${NAME}_linear.fits" 2>&1 | grep -v -i warn

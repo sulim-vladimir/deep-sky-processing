@@ -38,26 +38,54 @@ bg = np.median(L)
 sig = 1.4826 * np.median(np.abs(L - bg))
 
 # --- 1. PSF ---
-R = 15
 s = nd.gaussian_filter(L, 1.5)
-peaks = (s == nd.maximum_filter(s, 2 * R + 1)) & (s - bg > 60 * sig)
 sat_level = 0.85 * rgb.max()
 saturated = nd.binary_dilation(rgb.max(axis=0) > sat_level, iterations=12)
-ys, xs = np.nonzero(peaks)
-stamps = []
-for y, x in zip(ys, xs):
-    if not (2 * R < y < H - 2 * R and 2 * R < x < W - 2 * R) or saturated[y, x]:
-        continue
-    cut = L[y - R:y + R + 1, x - R:x + R + 1] - bg
-    # isolated: nothing else brighter than 5 % of the peak further than 12 px from the centre
+
+
+def select_stars(R, iso, cen, thr):
+    """Stamps (2R+1 square) of bright (> thr sky sigma), unsaturated stars with nothing brighter than 5 % of
+    the peak beyond `iso` px from the centre, centred on their centroid (within `cen` px)."""
+    peaks = (s == nd.maximum_filter(s, 2 * R + 1)) & (s - bg > thr * sig)
     yy, xx = np.mgrid[-R:R + 1, -R:R + 1]
     rr = np.hypot(yy, xx)
-    if (cut[rr > 12] > 0.05 * cut[R, R]).any():
-        continue
-    w = np.clip(cut, 0, None) * (rr < 10)
-    cy, cx = (w * yy).sum() / w.sum(), (w * xx).sum() / w.sum()
-    cut = nd.shift(cut, (-cy, -cx), order=3, mode="constant")
-    stamps.append(cut / cut.sum())
+    out, where = [], []
+    for y, x in zip(*np.nonzero(peaks)):
+        if not (2 * R < y < H - 2 * R and 2 * R < x < W - 2 * R) or saturated[y, x]:
+            continue
+        cut = L[y - R:y + R + 1, x - R:x + R + 1] - bg
+        if (cut[rr > iso] > 0.05 * cut[R, R]).any():
+            continue
+        w = np.clip(cut, 0, None) * (rr < cen)
+        cy, cx = (w * yy).sum() / w.sum(), (w * xx).sum() / w.sum()
+        cut = nd.shift(cut, (-cy, -cx), order=3, mode="constant")
+        out.append(cut / cut.sum())
+        where.append((y, x))
+    return out, where
+
+
+# standard selection (what the 25 Oct images used); if it finds too few stars - wider stars on a night of
+# poorer seeing, or a shallower stack - size the stamps to the stars and lower the brightness threshold
+R = 15
+stamps, where = select_stars(R, 12, 10, 60)
+if len(stamps) < 5:
+    pk = (s == nd.maximum_filter(s, 31)) & (s - bg > 20 * sig) & ~saturated
+    widths = []
+    for y, x in sorted(zip(*np.nonzero(pk)), key=lambda p: -s[p])[:20]:
+        if 20 < y < H - 20 and 20 < x < W - 20:
+            c = np.clip(L[y - 15:y + 16, x - 15:x + 16] - bg, 0, None)
+            g = np.mgrid[-15:16, -15:16]
+            widths.append(2.3548 * np.sqrt((c * (g[0] ** 2 + g[1] ** 2)).sum() / c.sum() / 2))
+    fw = float(np.median(widths))
+    R = int(np.ceil(max(15, 2 * fw)))
+    for thr in (60, 40, 25, 15):
+        stamps, where = select_stars(R, max(12, 1.4 * fw), max(10, 1.2 * fw), thr)
+        if len(stamps) >= 5:
+            break
+    print(f"few stars at the standard settings: star width ~{fw:.1f} px -> stamp {2 * R + 1} px, threshold {thr} sigma")
+ys, xs = [p[0] for p in where], [p[1] for p in where]
+if len(stamps) < 3:
+    print(f"WARNING: PSF from only {len(stamps)} stars - check the result for artefacts")
 psf = np.median(np.array(stamps), axis=0)
 yy, xx = np.mgrid[-R:R + 1, -R:R + 1]
 rr = np.hypot(yy, xx)

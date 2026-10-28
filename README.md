@@ -77,7 +77,11 @@ Tuning (defaults are the 25 Oct NGC 6503 result):
 
 - `KEEP_BEST=90%`: frames kept, by weighted FWHM
 - `CROP="40 40 1856 1016"`: x y w h cut after registration (ragged edges)
-- `WCS_FROM`: an already solved image of the same field; used when the online plate solve fails
+- `SOLVE=online`: plate solve with Siril (VizieR) first, astrometry.net offline when that fails;
+  `SOLVE=offline` skips the online try (it costs ~3 min when VizieR is down)
+- `WCS_FROM`: last resort, an already solved image of the same field (copies its WCS; handles flips, shifts and
+  rotations up to 5°)
+- `LIGHT_BIAS`, `HOT_DARK`: see above (lights without matching darks)
 - `DECONV_ITERS=20`, `DECONV_TV=0.002`: Richardson-Lucy iterations and smoothing
 - `DECONV_MINOR`: minor axis (arcmin) of the area left open for deconvolution; make it smaller when stars next to
   the galaxy get dark rings (NGC 5866 needed 1.0 instead of 2.8)
@@ -102,8 +106,10 @@ a mean with multiplicative normalisation (only the flat's shape matters).
   planes), each frame's sky level and contrast matched, sharper frames weighted more, equal R/G/B background.
 
 **3. Post (Siril).** Crop, then `subsky 2`: a 2nd-degree polynomial background (moonlight, town glow) removed per
-channel. Then the plate solve writes sky coordinates (WCS) into the header; steps 4 and 6 need them. If the solve
-fails and `WCS_FROM` is set, `scripts/align_wcs.py` finds the flip and sub-pixel shift between the two images by
+channel. Then the plate solve writes sky coordinates (WCS) into the header; steps 4 and 6 need them. Siril's solver
+(online catalogue) is tried first, then `scripts/solve_local.py`: astrometry.net's `solve-field` offline, with the
+4205-4207 index series (all-sky, 1.3 GB in `~/.local/share/astrometry`, copied from KStars' folder on the Pi).
+If both fail and `WCS_FROM` is set, `scripts/align_wcs.py` finds the flip and sub-pixel shift between the two images by
 phase correlation, moves the new image onto the solved one's grid and copies its header. That shift leaves a
 smeared strip (~16 px) on one edge of the final image; crop it off.
 Siril's photometric colour calibration is not used: on this camera it left blue too strong.
@@ -144,8 +150,10 @@ and registration correlate neighbouring pixels, so it is not used.
 - **Many frames fail to register** → keep `setfindstar -sigma=0.5 -relax=on` (step 2 does). On a finished stack
   use `setfindstar reset`, or noise is detected as thousands of stars.
 - **Plate solve fails at the right coordinates** → are the frames really that target? Solve one at other candidates.
-- **"libcurl error" / "HTTP code 503"** in `3_solve.log` → the VizieR server is down; set `WCS_FROM`. A permanent
-  fix is Siril's local Gaia catalogue, installed with its `Catalog_Installer.py` script (Scripts menu), a few GB.
+- **"libcurl error" / "HTTP code 503"** in `3_solve.log` → the VizieR server is down; the offline solve takes
+  over (set `SOLVE=offline` to skip the wait).
+- **Offline solve fails** → check `~/.local/share/astrometry` holds the index files; the system's astrometry.net
+  helper scripts break with NumPy 2, so `solve_local.py` runs solve-field with `--no-remove-lines --uniformize 0`.
 - **Donuts left or bright rings after flat-fielding** → the flats don't match the lights (camera moved, wrong set).
 - **Dark rings around stars after deconvolution** → a smaller `DECONV_MINOR`.
 - **`find_hot name`** (if you use it in your own scripts) writes `name.lst`: give the name without `.lst`.

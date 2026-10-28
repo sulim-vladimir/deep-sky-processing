@@ -1,6 +1,7 @@
 """Give a new (unsolved) image of the same field the WCS of an earlier solved one.
 
-Finds the flip (none / vertical) and sub-pixel shift by phase correlation of the luminance,
+Finds the flip (none / vertical), a small rotation (up to 5 deg, searched only when needed) and the sub-pixel
+shift by phase correlation of the luminance,
 resamples the new image onto the old pixel grid and saves it with the old header.
 Run: ~/iss/.venv/bin/python -I align_wcs.py <solved_ref.fits> <new.fits> <out.fits>
 """
@@ -44,9 +45,23 @@ for flip in (False, True):
     pk, dy, dx = xcorr(R, N)
     print(f"flip={flip}: correlation peak {pk:.1f}, shift dy={dy:.2f} dx={dx:.2f}")
     if best is None or pk > best[0]:
-        best = (pk, flip, dy, dx)
-pk, flip, dy, dx = best
+        best = (pk, flip, 0.0, dy, dx)
+# a weak peak means the field is also rotated (camera turned between nights): search small rotations,
+# coarse then fine
+if best[0] < 15:
+    flip = best[1]
+    N0 = prep(new[:, ::-1] if flip else new)
+    for step, centre, span in ((0.25, 0.0, 5.0), (0.05, None, 0.25)):
+        c0 = best[2] if centre is None else centre
+        for ang in np.arange(c0 - span, c0 + span + 1e-9, step):
+            pk, dy, dx = xcorr(R, nd.rotate(N0, ang, reshape=False, order=1))
+            if pk > best[0]:
+                best = (pk, flip, float(ang), dy, dx)
+    print(f"rotation search: {best[2]:+.2f} deg, correlation peak {best[0]:.1f}, shift dy={best[3]:.2f} dx={best[4]:.2f}")
+pk, flip, ang, dy, dx = best
 src = new[:, ::-1] if flip else new
+if ang:
+    src = np.stack([nd.rotate(src[c], ang, reshape=False, order=3, mode="nearest") for c in range(src.shape[0])])
 out = np.stack([nd.shift(src[c], (dy, dx), order=3, mode="nearest") for c in range(src.shape[0])]).astype(np.float32)
 # check: residual shift should be ~0
 print("residual:", np.round(xcorr(R, prep(out))[1:], 2))
