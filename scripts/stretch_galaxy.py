@@ -6,7 +6,8 @@ Output: final/<name>[_bin2]_field.png and final/<name>[_bin2]_crop_*x.png next t
 
 Other options: --bg=grid|flat (grid = masked 64-px background model, flat = only a constant per channel,
 relying on Siril's subsky), --black=2.2 (black point in sky sigmas below the sky), --sky=0.10 (sky level
-in the output), --lumsmooth=1.3 (luminance smoothing in faint areas, px; 0 = off), --tag=<suffix>.
+in the output), --chroma=2.5 (colour-noise smoothing everywhere, px; 0 = off),
+--lumsmooth=1.3 (luminance smoothing in faint areas, px; 0 = off), --tag=<suffix>.
 Sky-only options (masked off the galaxy and stars): --skydn=K wavelet (starlet, 4 scales) soft threshold at
 K x noise per scale; --skychroma=S extra colour smoothing (px); --skyflat=A (0..0.9) lowers the stretch
 contrast right at the sky level so sky noise is shown smaller.
@@ -36,7 +37,7 @@ from PIL import Image
 
 BIN = 1
 OPT = {"bg": "grid", "black": "2.2", "sky": "0.10", "lumsmooth": "1.3", "tag": "",
-       "skydn": "0", "skychroma": "0", "skyflat": "0"}
+       "skydn": "0", "skychroma": "0", "skyflat": "0", "chroma": "2.5"}
 args = []
 for a in sys.argv[1:]:
     if a.startswith("--bin="):
@@ -217,7 +218,8 @@ sigma = 1.4826 * np.median(np.abs(lum[sky] - np.median(lum[sky])))
 
 # --- 2. noise reduction ---
 chroma = rgb - lum[..., None]
-chroma = np.dstack([nd.gaussian_filter(chroma[..., c], px(2.5)) for c in range(3)])
+if float(OPT["chroma"]) > 0:                                     # --chroma=0: no colour-noise smoothing
+    chroma = np.dstack([nd.gaussian_filter(chroma[..., c], px(float(OPT["chroma"]))) for c in range(3)])
 snr = nd.gaussian_filter(lum, px(2)) / sigma
 w_smooth = np.clip(1 - (snr - 1) / 6, 0, 1)                       # 1 in the sky, 0 on real signal
 ls = float(OPT['lumsmooth'])

@@ -85,6 +85,8 @@ Tuning (defaults are the 25 Oct NGC 6503 result):
 - `DECONV_ITERS=20`, `DECONV_TV=0.002`: Richardson-Lucy iterations and smoothing
 - `DECONV_MINOR`: minor axis (arcmin) of the area left open for deconvolution; make it smaller when stars next to
   the galaxy get dark rings (NGC 5866 needed 1.0 instead of 2.8)
+- `DECONV_MAJOR`: the same along the major axis, for a star sitting on the galaxy's long axis (NGC 1569: 2.4
+  instead of 3.6)
 - `DENOISE_MOD=0.7`: NL-Bayes strength (1 = full)
 - `STRETCH_OPTS`: options for `scripts/stretch_galaxy.py` (below)
 - `TAG=final`: output name suffix; change it when trying variants so results are not overwritten
@@ -155,7 +157,8 @@ and registration correlate neighbouring pixels, so it is not used.
 - **Offline solve fails** → check `~/.local/share/astrometry` holds the index files; the system's astrometry.net
   helper scripts break with NumPy 2, so `solve_local.py` runs solve-field with `--no-remove-lines --uniformize 0`.
 - **Donuts left or bright rings after flat-fielding** → the flats don't match the lights (camera moved, wrong set).
-- **Dark rings around stars after deconvolution** → a smaller `DECONV_MINOR`.
+- **Dark rings around stars after deconvolution** → a smaller `DECONV_MINOR` (or `DECONV_MAJOR` when the star lies
+  along the galaxy's long axis).
 - **`find_hot name`** (if you use it in your own scripts) writes `name.lst`: give the name without `.lst`.
 
 

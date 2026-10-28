@@ -34,7 +34,7 @@ source "$CONF"
 : "${KEEP_BEST:=90%}"                        # frames kept by weighted FWHM
 : "${SOLVE:=online}"                         # online = Siril/VizieR first, then offline; offline = astrometry.net only
 : "${WCS_FROM:=}"                            # last resort: a solved image of the same field (copies its WCS)
-: "${DECONV_ITERS:=20}" "${DECONV_TV:=0.002}" "${DECONV_MINOR:=$MINOR}"
+: "${DECONV_ITERS:=20}" "${DECONV_TV:=0.002}" "${DECONV_MAJOR:=$MAJOR}" "${DECONV_MINOR:=$MINOR}"
 : "${DENOISE_MOD:=0.7}"
 : "${STRETCH_OPTS:=--lumsmooth=0 --black=4 --sky=0.13 --bg=flat --skydn=1.0 --skychroma=3 --skyflat=0.15}"
 : "${TAG:=final}"
@@ -166,7 +166,7 @@ fi
 if [ "$FIRST" -le 4 ]; then
     echo "--- deconvolution"
     py "$REPO/scripts/deconv_galaxy.py" "$WORK/${NAME}_linear.fits" "$WORK/${NAME}_deconv.fits" \
-        "$DECONV_ITERS" "$DECONV_TV" "--gal=$RA,$DEC,$MAJOR,$DECONV_MINOR,$PA" 2>&1 | grep -v -i -E "warn|RADECSYS"
+        "$DECONV_ITERS" "$DECONV_TV" "--gal=$RA,$DEC,$DECONV_MAJOR,$DECONV_MINOR,$PA" 2>&1 | grep -v -i -E "warn|RADECSYS"
 fi
 
 # ---------------------------------------------------------------- 5. denoise
