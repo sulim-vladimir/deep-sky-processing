@@ -7,7 +7,9 @@ Output: final/<name>[_bin2]_field.png and final/<name>[_bin2]_crop_*x.png next t
 Other options: --bg=grid|flat (grid = masked 64-px background model, flat = only a constant per channel,
 relying on Siril's subsky), --black=2.2 (black point in sky sigmas below the sky), --sky=0.10 (sky level
 in the output), --chroma=2.5 (colour-noise smoothing everywhere, px; 0 = off),
---lumsmooth=1.3 (luminance smoothing in faint areas, px; 0 = off), --tag=<suffix>.
+--lumsmooth=1.3 (luminance smoothing in faint areas, px; 0 = off), --tag=<suffix>,
+--galmask=1.9,3.0 (galaxy mask = these multiples of the major, minor axis; kept off the sky and the white-balance
+stars. Use ~1.0,1.3 for a galaxy that fills much of the field, e.g. M81).
 Sky-only options (masked off the galaxy and stars): --skydn=K wavelet (starlet, 4 scales) soft threshold at
 K x noise per scale; --skychroma=S extra colour smoothing (px); --skyflat=A (0..0.9) lowers the stretch
 contrast right at the sky level so sky noise is shown smaller.
@@ -37,7 +39,7 @@ from PIL import Image
 
 BIN = 1
 OPT = {"bg": "grid", "black": "2.2", "sky": "0.10", "lumsmooth": "1.3", "tag": "",
-       "skydn": "0", "skychroma": "0", "skyflat": "0", "chroma": "2.5"}
+       "skydn": "0", "skychroma": "0", "skyflat": "0", "chroma": "2.5", "galmask": "1.9,3.0"}
 args = []
 for a in sys.argv[1:]:
     if a.startswith("--bin="):
@@ -50,6 +52,7 @@ for a in sys.argv[1:]:
 sys.argv[1:] = args
 fn, name = sys.argv[1], sys.argv[2]
 major, minor, pa = (float(v) for v in sys.argv[3:6])
+GM_A, GM_B = (float(v) for v in OPT["galmask"].split(","))
 tag = (name if BIN == 1 else f"{name}_bin{BIN}") + (f"_{OPT['tag']}" if OPT["tag"] else "")
 
 
@@ -63,7 +66,11 @@ os.makedirs(OUT, exist_ok=True)
 
 hdr = fits.getheader(fn)
 wcs = WCS(hdr, naxis=2)
-rgb = np.moveaxis(fits.getdata(fn).astype(np.float64), 0, -1)   # (H, W, 3), FITS row 0 = bottom
+raw = fits.getdata(fn)
+rgb = np.moveaxis(raw.astype(np.float64), 0, -1)                # (H, W, 3), FITS row 0 = bottom
+if np.issubdtype(raw.dtype, np.integer):                        # 16-bit stack (e.g. an external one): to 0..1
+    rgb /= 65535.0
+del raw
 H, W, _ = rgb.shape
 scale = proj_plane_pixel_scales(wcs).mean() * 3600               # arcsec/px
 
@@ -82,7 +89,7 @@ yy, xx = np.mgrid[0:H, 0:W]
 u = (xx - gx) * np.cos(theta) + (yy - gy) * np.sin(theta)
 v = -(xx - gx) * np.sin(theta) + (yy - gy) * np.cos(theta)
 a_px, b_px = major * 60 / scale / 2, minor * 60 / scale / 2
-gal_mask = (u / (1.9 * a_px)) ** 2 + (v / (3.0 * b_px)) ** 2 < 1
+gal_mask = (u / (GM_A * a_px)) ** 2 + (v / (GM_B * b_px)) ** 2 < 1
 print(f"{name}: galaxy at x={gx:.0f} y={gy:.0f}, {scale:.3f}\"/px")
 
 # --- 0a. white balance from Gaia star colours (Siril's PCC leaves blue too strong) ---
@@ -158,7 +165,7 @@ if BIN > 1:
     u = (xx - gx) * np.cos(theta) + (yy - gy) * np.sin(theta)
     v = -(xx - gx) * np.sin(theta) + (yy - gy) * np.cos(theta)
     a_px, b_px = a_px / BIN, b_px / BIN
-    gal_mask = (u / (1.9 * a_px)) ** 2 + (v / (3.0 * b_px)) ** 2 < 1
+    gal_mask = (u / (GM_A * a_px)) ** 2 + (v / (GM_B * b_px)) ** 2 < 1
     noise_bin = sky_noise(rgb)
     print(f"binned {BIN}x{BIN}: {W}x{H} px, {scale:.2f}\"/px, galaxy at x={gx:.0f} y={gy:.0f}")
     print(f"sky noise per pixel: full {noise_full:.3e} -> binned {noise_bin:.3e}  "

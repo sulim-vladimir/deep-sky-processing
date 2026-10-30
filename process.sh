@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Deep-sky galaxy pipeline: calibrate, stack, deconvolve, denoise, stretch.
 #
-#   ./process.sh sessions/<session>.conf [first step]
+#   ./process.sh sessions/<session>.conf [first step] [last step]
 #
 # Steps (start later with the step number, e.g. "5" to only redo the stretch):
 #   1 masters   master dark, dark-flat, flat                      (Siril)
@@ -14,8 +14,9 @@
 set -euo pipefail
 
 REPO=$(cd "$(dirname "$0")" && pwd)
-CONF=${1:?usage: ./process.sh sessions/<session>.conf [first step]}
+CONF=${1:?usage: ./process.sh sessions/<session>.conf [first step] [last step]}
 FIRST=${2:-1}
+LAST=${3:-6}
 # shellcheck source=/dev/null
 source "$CONF"
 
@@ -34,7 +35,11 @@ source "$CONF"
 : "${KEEP_BEST:=90%}"                        # frames kept by weighted FWHM
 : "${SOLVE:=online}"                         # online = Siril/VizieR first, then offline; offline = astrometry.net only
 : "${WCS_FROM:=}"                            # last resort: a solved image of the same field (copies its WCS)
+: "${DECONV:=1}"                              # 0 = skip step 4: denoise and stretch start from the linear image
 : "${DECONV_ITERS:=20}" "${DECONV_TV:=0.002}" "${DECONV_MAJOR:=$MAJOR}" "${DECONV_MINOR:=$MINOR}"
+: "${BG:=poly}"                               # gradient removal in step 3: poly = Siril subsky (2nd degree),
+                                              # radial = vignetting + gradient model (scripts/vignette_bg.py), none = off
+: "${BG_GALMASK:=1.3}"                        # BG=radial: sky sampled outside this multiple of the galaxy's axes
 : "${DENOISE_MOD:=0.7}"
 : "${STRETCH_OPTS:=--lumsmooth=0 --black=4 --sky=0.13 --bg=flat --skydn=1.0 --skychroma=3 --skyflat=0.15}"
 : "${TAG:=final}"
@@ -52,6 +57,7 @@ run_siril() {   # run_siril <name>: runs $S/<name>.ssf, log in $S/<name>.log
     grep -E 'Total: |Integration of|Background noise value \(channel: #1\)|Resolution:|Image center|NL-Bayes exec' "$S/$1.log" || true
 }
 py() { "$PYTHON" -I "$@"; }
+stop_after() { if [ "$LAST" -le "$1" ]; then echo "stopped after step $1"; exit 0; fi; }
 
 # ---------------------------------------------------------------- 1. masters
 if [ "$FIRST" -le 1 ]; then
@@ -84,6 +90,7 @@ fi
 [ -z "$MASTER_DARK" ] && [ -n "$DARKS" ] && MASTER_DARK="$WORK/masters/master_dark"
 [ -z "$MASTER_FLAT" ] && [ -n "$FLATS" ] && MASTER_FLAT="$WORK/masters/master_flat"
 
+stop_after 1
 # ---------------------------------------------------------------- 2. stack
 if [ "$FIRST" -le 2 ]; then
     CAL=""
@@ -124,15 +131,16 @@ EOF
     fi
 fi
 
+stop_after 2
 # ---------------------------------------------------------------- 3. post
 if [ "$FIRST" -le 3 ]; then
     cat > "$S/3_post.ssf" <<EOF
 requires 1.4.0
 cd "$WORK"
 load ${NAME}_stack
-# cut the ragged registration edges, remove the gradient (2nd-degree polynomial)
+# cut the ragged registration edges, remove the gradient (BG=poly: 2nd-degree polynomial; radial: after the solve)
 crop $CROP
-subsky 2 -samples=20 -tolerance=1.0
+$([ "$BG" = poly ] && echo "subsky 2 -samples=20 -tolerance=1.0")
 save ${NAME}_linear
 EOF
     run_siril 3_post
@@ -160,32 +168,43 @@ EOF
         echo "Plate solve failed. If the catalogue server is down, set WCS_FROM=<a solved image of this field> in the"
         echo "session file and rerun from step 3:  ./process.sh $CONF 3"; exit 1
     fi
+    if [ "$BG" = radial ]; then
+        echo "--- background: radial vignetting + gradient"
+        py "$REPO/scripts/vignette_bg.py" "$WORK/${NAME}_linear.fits" "$WORK/${NAME}_linear.fits" \
+            "--gal=$RA,$DEC,$MAJOR,$MINOR,$PA" "--galmask=$BG_GALMASK" 2>&1 | grep -v -i -E "warn|RADECSYS"
+    fi
 fi
 
+stop_after 3
 # ---------------------------------------------------------------- 4. deconv
-if [ "$FIRST" -le 4 ]; then
+if [ "$DECONV" = 1 ]; then BASE=${NAME}_deconv; else BASE=${NAME}_linear; fi
+if [ "$FIRST" -le 4 ] && [ "$DECONV" != 1 ]; then
+    echo "--- deconvolution skipped (DECONV=0)"
+elif [ "$FIRST" -le 4 ]; then
     echo "--- deconvolution"
     py "$REPO/scripts/deconv_galaxy.py" "$WORK/${NAME}_linear.fits" "$WORK/${NAME}_deconv.fits" \
         "$DECONV_ITERS" "$DECONV_TV" "--gal=$RA,$DEC,$DECONV_MAJOR,$DECONV_MINOR,$PA" 2>&1 | grep -v -i -E "warn|RADECSYS"
 fi
 
+stop_after 4
 # ---------------------------------------------------------------- 5. denoise
 if [ "$FIRST" -le 5 ]; then
     cat > "$S/5_denoise.ssf" <<EOF
 requires 1.4.0
 cd "$WORK"
-load ${NAME}_deconv
+load $BASE
 denoise -nocosmetic -mod=$DENOISE_MOD
-save ${NAME}_deconv_dn
+save ${BASE}_dn
 EOF
     run_siril 5_denoise
 fi
 
+stop_after 5
 # ---------------------------------------------------------------- 6. stretch
 if [ "$FIRST" -le 6 ]; then
     echo "--- stretch"
     # shellcheck disable=SC2086
-    py "$REPO/scripts/stretch_galaxy.py" "$WORK/${NAME}_deconv_dn.fits" "$NAME" "$MAJOR" "$MINOR" "$PA" "$RA" "$DEC" \
+    py "$REPO/scripts/stretch_galaxy.py" "$WORK/${BASE}_dn.fits" "$NAME" "$MAJOR" "$MINOR" "$PA" "$RA" "$DEC" \
         $STRETCH_OPTS "--tag=$TAG" 2>&1 | grep -v -i -E "warn|RADECSYS|_ureduce|true_divide|out = np.where"
 fi
 echo "done: $WORK/final/"
