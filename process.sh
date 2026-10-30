@@ -57,6 +57,8 @@ run_siril() {   # run_siril <name>: runs $S/<name>.ssf, log in $S/<name>.log
     grep -E 'Total: |Integration of|Background noise value \(channel: #1\)|Resolution:|Image center|NL-Bayes exec' "$S/$1.log" || true
 }
 py() { "$PYTHON" -I "$@"; }
+# FITS frames are linked; camera raw files (DSLR .CR2 etc.) are converted to FITS, keeping the colour mosaic (CFA)
+ingest() { if ls "$1" | grep -q -i -E '\.(fits?|fts)$'; then echo link; else echo convert; fi; }
 stop_after() { if [ "$LAST" -le "$1" ]; then echo "stopped after step $1"; exit 0; fi; }
 
 # ---------------------------------------------------------------- 1. masters
@@ -65,13 +67,13 @@ if [ "$FIRST" -le 1 ]; then
         echo "requires 1.4.0"; echo "set16bits"; echo "setext fits"
         if [ -z "$MASTER_DARK" ] && [ -n "$DARKS" ]; then
             echo "# master dark: mean, winsorized 3/3 sigma rejection, no normalisation (keep the absolute level)"
-            echo "cd \"$DARKS\""; echo "link dark -out=$WORK/masters/dark"
+            echo "cd \"$DARKS\""; echo "$(ingest "$DARKS") dark -out=$WORK/masters/dark"
             echo "cd \"$WORK/masters/dark\""; echo "stack dark rej 3 3 -nonorm -out=../master_dark"
         fi
         if [ -z "$MASTER_FLAT" ] && [ -n "$FLATS" ]; then
             if [ -n "$DARKFLATS" ]; then
                 echo "# master dark-flat"
-                echo "cd \"$DARKFLATS\""; echo "link df -out=$WORK/masters/darkflat"
+                echo "cd \"$DARKFLATS\""; echo "$(ingest "$DARKFLATS") df -out=$WORK/masters/darkflat"
                 echo "cd \"$WORK/masters/darkflat\""; echo "stack df rej 3 3 -nonorm -out=../master_darkflat"
                 FLAT_OFFSET="-dark=$WORK/masters/master_darkflat"
             elif [ -n "$FLAT_BIAS" ]; then
@@ -80,7 +82,7 @@ if [ "$FIRST" -le 1 ]; then
                 echo "need DARKFLATS or FLAT_BIAS for the flats" >&2; exit 1
             fi
             echo "# master flat: offset removed, then multiplicative normalisation"
-            echo "cd \"$FLATS\""; echo "link flat -out=$WORK/masters/flat"
+            echo "cd \"$FLATS\""; echo "$(ingest "$FLATS") flat -out=$WORK/masters/flat"
             echo "cd \"$WORK/masters/flat\""; echo "calibrate flat $FLAT_OFFSET"
             echo "stack pp_flat rej 3 3 -norm=mul -out=../master_flat"
         fi
@@ -113,7 +115,7 @@ set16bits
 setext fits
 $PRE
 cd "$LIGHTS"
-link light -out=$WORK/lights
+$(ingest "$LIGHTS") light -out=$WORK/lights
 cd "$WORK/lights"
 # dark, flat, hot/cold pixels from the dark, debayer (-equalize_cfa keeps the flat from tinting)
 calibrate light$CAL -cfa -equalize_cfa -debayer
@@ -127,7 +129,8 @@ stack r_pp_light rej 3 3 -norm=addscale -output_norm -rgb_equal -weight=wfwhm -o
 EOF
     run_siril 2_stack
     if [ "$KEEP_FRAMES" != 1 ]; then
-        find "$WORK/lights" -maxdepth 1 \( -name 'pp_*' -o -name 'r_pp_*' -o -type l \) -delete
+        # calibrated/registered frames, links, and frames converted from camera raw files
+        find "$WORK/lights" -maxdepth 1 \( -name 'pp_*' -o -name 'r_pp_*' -o -name 'light_[0-9]*.fits' -o -type l \) -delete
     fi
 fi
 

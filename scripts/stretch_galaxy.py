@@ -67,7 +67,7 @@ os.makedirs(OUT, exist_ok=True)
 hdr = fits.getheader(fn)
 wcs = WCS(hdr, naxis=2)
 raw = fits.getdata(fn)
-rgb = np.moveaxis(raw.astype(np.float64), 0, -1)                # (H, W, 3), FITS row 0 = bottom
+rgb = np.moveaxis(raw.astype(np.float32), 0, -1)                # (H, W, 3), FITS row 0 = bottom; float32 halves memory
 if np.issubdtype(raw.dtype, np.integer):                        # 16-bit stack (e.g. an external one): to 0..1
     rgb /= 65535.0
 del raw
