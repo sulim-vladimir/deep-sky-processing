@@ -45,6 +45,16 @@ Siril scripts the run wrote, with their logs, in `<WORK>/siril/`.
 - **Check what you shot** before processing: Ekos headers carry no pointing. Plate solve one frame per block of the
   night (gaps in DATE-OBS = slews). On 25 Oct, 196 NGC 6503 frames were saved as NGC 5866.
 
+**Archive layout** (`Transcend/Astrophoto/deepsky/<year>/`): one folder per object, lower case (`ngc6503`, `m81`).
+An object shot on one night holds its frames directly; with several nights, one subfolder per night, named by the
+evening's date (frames after midnight belong to the evening before), with a suffix only for another camera.
+Frame folders in lower case; the pipeline's `work/` next to them.
+
+```
+ngc5866/{light,dark,work}     ngc6503/2026-10-25/{light,work}     ngc6503/2026-10-26_flats/{flat,darkflat}
+m81/2026-08-23/light          m81/2026-09-02_550d/{light,dark}
+```
+
 Put the lights of one target in one folder. Links keep the originals untouched:
 
 ```bash
