@@ -47,8 +47,8 @@ source "$CONF"
 : "${BG_RESIDUAL_GALMASK:=2.0}"               # BG_RESIDUAL: galaxies masked out to this multiple of their axes
 : "${GALAXIES_EXTRA:=}"                       # more galaxies in the field, kept out of the background models:
                                               # "RA,DEC,MAJOR,MINOR,PA RA,DEC,MAJOR,MINOR,PA ..."
-: "${DENOISE_MOD:=0.7}"
-: "${STRETCH_OPTS:=--lumsmooth=0 --black=4 --sky=0.13 --bg=flat --skydn=1.0 --skychroma=3 --skyflat=0.15}"
+: "${DENOISE_MOD:=0.4}"                        # NL-Bayes strength (1 = full); 0.7 until 31 Oct
+: "${STRETCH_OPTS:=--lumsmooth=0 --black=4 --sky=0.13 --bg=flat --skydn=0.5 --skychroma=1.5 --chroma=1.5 --skyflat=0.15}"
 : "${TAG:=final}"
 : "${REPORT:=1}"                              # 1 = step 7: star sizes + <NAME>_<TAG>_report.md; 0 = off
 : "${REPORT_LANG:=uk}"                        # report language: uk (Ukrainian) or en

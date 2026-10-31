@@ -115,7 +115,8 @@ Tuning (defaults are the 25 Oct NGC 6503 result, except deconvolution, which is 
   the galaxy get dark rings (NGC 5866 needed 1.0 instead of 2.8)
 - `DECONV_MAJOR`: the same along the major axis, for a star sitting on the galaxy's long axis (NGC 1569: 2.4
   instead of 3.6)
-- `DENOISE_MOD=0.7`: NL-Bayes strength (1 = full)
+- `DENOISE_MOD=0.4`: NL-Bayes strength (1 = full). Light noise reduction by default since 31 Oct (0.7 before,
+  with `--skydn=1.0 --skychroma=3 --chroma=2.5`); the sessions up to 27 Oct keep their values in their files
 - `STRETCH_OPTS`: options for `scripts/stretch_galaxy.py` (below)
 - `TAG=final`: output name suffix; change it when trying variants so results are not overwritten
 - `NODENOISE=1`: step 6 also writes a version with no noise reduction at all, stretched from the image before
@@ -162,7 +163,7 @@ Siril's photometric colour calibration is not used: on this camera it left blue 
 - Colour kept: every channel is multiplied by the same factor (deconvolved / original luminance).
 
 **5. Denoise (Siril).** NL-Bayes (non-local Bayesian, Lebrun–Buades–Morel 2013) at `DENOISE_MOD` strength: the
-result is 70 % denoised + 30 % original, which keeps a natural grain.
+with the default 0.4 the result is 40 % denoised + 60 % original, which keeps a natural grain.
 
 **6. Stretch (`scripts/stretch_galaxy.py`).**
 1. White balance from Gaia DR3: stars G < 16 in the field, R/G/B flux measured in an aperture, a fit of colour
@@ -173,12 +174,13 @@ result is 70 % denoised + 30 % original, which keeps a natural grain.
    channel clips at its own level after calibration, so the white balance would tint them pale or pink).
 3. `--bg=flat`: one constant per channel subtracted (the gradient was removed in step 3). `--bg=grid` models the
    background on a 64 px grid: only for data without flats, it adds blotches otherwise.
-4. Colour noise: the colour (not the brightness) smoothed with a 2.5 px Gaussian (`--chroma`), as brightness-weighted
+4. Colour noise: the colour (not the brightness) smoothed with a Gaussian (`--chroma`, 1.5 px in the pipeline's
+   defaults, 2.5 if not given), as brightness-weighted
    ratios blur(R,G,B) / blur(lum). (Until 31 Oct the differences R,G,B − lum were blurred: around bright stars
    that moved the core's colour into the halo, a pale centre inside an over-saturated ring.)
 5. Sky only (where the signal is below ~2–8σ): `--skydn=K` soft-thresholds 4 starlet (à trous) wavelet scales at
-   K × each scale's noise; `--skychroma=S` adds S px colour smoothing. 1.0 / 3 is light; 1.5 / 4 mild;
-   2.5 / 6 strong, too smooth (faint stars disappear).
+   K × each scale's noise; `--skychroma=S` adds S px colour smoothing. 0.5 / 1.5 very light (the default since
+   31 Oct); 1.0 / 3 light; 1.5 / 4 mild; 2.5 / 6 strong, too smooth (faint stars disappear).
 6. Stretch: black point `--black=4` sky-σ below the sky (2 clips noise dips to pure black grains), arcsinh curve
    with the white point above the galaxy core, sky at `--sky=0.13`, `--skyflat=0.15` lowers contrast just around
    the sky level. `--lumsmooth` (luminance blur in faint areas) is off; the wavelet step replaces it.
