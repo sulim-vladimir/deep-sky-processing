@@ -7,16 +7,17 @@
 #   1 masters   master dark, dark-flat, flat                      (Siril)
 #   2 stack     calibrate, register, select 90 %, stack the lights  (Siril)
 #   3 post      crop, gradient removal, plate solve               (Siril)
-#   4 deconv    Richardson-Lucy on the galaxy                     (Python)
+#   4 deconv    Richardson-Lucy on the galaxy, only with DECONV=1  (Python)
 #   5 denoise   NL-Bayes, partial strength                        (Siril)
 #   6 stretch   Gaia white balance, sky-only denoise, stretch     (Python)
+#   7 report    star sizes (Siril findstar), text report for a forum/article  (Siril + Python)
 # The Siril scripts are written to <WORK>/siril/ so you can read or rerun each one; logs are next to them.
 set -euo pipefail
 
 REPO=$(cd "$(dirname "$0")" && pwd)
 CONF=${1:?usage: ./process.sh sessions/<session>.conf [first step] [last step]}
 FIRST=${2:-1}
-LAST=${3:-6}
+LAST=${3:-7}
 # shellcheck source=/dev/null
 source "$CONF"
 
@@ -32,18 +33,32 @@ source "$CONF"
 : "${HOT_DARK:=}"                            # no darks: hot/cold pixel map from this master dark (any offset)
 : "${FOCAL:=750}" "${PIXEL:=2.9}"
 : "${CROP:=40 40 1856 1016}"                 # x y w h after registration (1936 x 1096 frames)
+: "${LIGHTS_SKIP:=}"                          # lights left out, by position in file-name order: "25 26" or "25-26"
 : "${KEEP_BEST:=90%}"                        # frames kept by weighted FWHM
 : "${SOLVE:=online}"                         # online = Siril/VizieR first, then offline; offline = astrometry.net only
 : "${WCS_FROM:=}"                            # last resort: a solved image of the same field (copies its WCS)
-: "${DECONV:=1}"                              # 0 = skip step 4: denoise and stretch start from the linear image
+: "${DECONV:=0}"                              # 1 = run step 4 (deconvolution); 0 = denoise and stretch start from the linear image
 : "${DECONV_ITERS:=20}" "${DECONV_TV:=0.002}" "${DECONV_MAJOR:=$MAJOR}" "${DECONV_MINOR:=$MINOR}"
 : "${BG:=poly}"                               # gradient removal in step 3: poly = Siril subsky (2nd degree),
                                               # radial = vignetting + gradient model (scripts/vignette_bg.py), none = off
 : "${BG_GALMASK:=1.3}"                        # BG=radial: sky sampled outside this multiple of the galaxy's axes
+: "${BG_RESIDUAL:=0}"                         # 2nd background stage after BG (scripts/bg_residual.py): smoothing
+                                              # scale in px (e.g. 160); 0 = off
+: "${BG_RESIDUAL_GALMASK:=2.0}"               # BG_RESIDUAL: galaxies masked out to this multiple of their axes
+: "${GALAXIES_EXTRA:=}"                       # more galaxies in the field, kept out of the background models:
+                                              # "RA,DEC,MAJOR,MINOR,PA RA,DEC,MAJOR,MINOR,PA ..."
 : "${DENOISE_MOD:=0.7}"
 : "${STRETCH_OPTS:=--lumsmooth=0 --black=4 --sky=0.13 --bg=flat --skydn=1.0 --skychroma=3 --skyflat=0.15}"
 : "${TAG:=final}"
+: "${REPORT:=1}"                              # 1 = step 7: star sizes + <NAME>_<TAG>_report.md; 0 = off
+: "${REPORT_LANG:=uk}"                        # report language: uk (Ukrainian) or en
+: "${NODENOISE:=1}"                           # 1 = also a version with no noise reduction at all (no NL-Bayes, no sky
+                                              # or colour smoothing in the stretch): <NAME>_<TAG>_nodn_*; 0 = off
 : "${KEEP_FRAMES:=0}"                        # 1 = keep the per-frame calibrated/registered files
+
+# the galaxy plus any others in the field, as --gal= options for the background scripts
+GAL_ARGS=("--gal=$RA,$DEC,$MAJOR,$MINOR,$PA")
+for g in $GALAXIES_EXTRA; do GAL_ARGS+=("--gal=$g"); done
 
 mkdir -p "$WORK/siril" "$WORK/masters"
 S="$WORK/siril"
@@ -117,6 +132,7 @@ $PRE
 cd "$LIGHTS"
 $(ingest "$LIGHTS") light -out=$WORK/lights
 cd "$WORK/lights"
+$(for r in $LIGHTS_SKIP; do echo "unselect light ${r%-*} ${r#*-}"; done)
 # dark, flat, hot/cold pixels from the dark, debayer (-equalize_cfa keeps the flat from tinting)
 calibrate light$CAL -cfa -equalize_cfa -debayer
 # few stars per frame (small field, bright sky): more sensitive star detection
@@ -174,7 +190,12 @@ EOF
     if [ "$BG" = radial ]; then
         echo "--- background: radial vignetting + gradient"
         py "$REPO/scripts/vignette_bg.py" "$WORK/${NAME}_linear.fits" "$WORK/${NAME}_linear.fits" \
-            "--gal=$RA,$DEC,$MAJOR,$MINOR,$PA" "--galmask=$BG_GALMASK" 2>&1 | grep -v -i -E "warn|RADECSYS"
+            "${GAL_ARGS[@]}" "--galmask=$BG_GALMASK" 2>&1 | grep -v -i -E "warn|RADECSYS"
+    fi
+    if [ "$BG_RESIDUAL" != 0 ]; then
+        echo "--- background: residual, ${BG_RESIDUAL} px"
+        py "$REPO/scripts/bg_residual.py" "$WORK/${NAME}_linear.fits" "$WORK/${NAME}_linear.fits" \
+            "${GAL_ARGS[@]}" "--smooth=$BG_RESIDUAL" "--galmask=$BG_RESIDUAL_GALMASK" 2>&1 | grep -v -i -E "warn|RADECSYS"
     fi
 fi
 
@@ -208,6 +229,35 @@ if [ "$FIRST" -le 6 ]; then
     echo "--- stretch"
     # shellcheck disable=SC2086
     py "$REPO/scripts/stretch_galaxy.py" "$WORK/${BASE}_dn.fits" "$NAME" "$MAJOR" "$MINOR" "$PA" "$RA" "$DEC" \
-        $STRETCH_OPTS "--tag=$TAG" 2>&1 | grep -v -i -E "warn|RADECSYS|_ureduce|true_divide|out = np.where"
+        $STRETCH_OPTS "--tag=$TAG" 2>&1 | tee "$S/6_stretch.log" |
+        grep -v -i -E "warn|RADECSYS|_ureduce|true_divide|out = np.where"
+    if [ "$NODENOISE" = 1 ]; then
+        echo "--- stretch without noise reduction"
+        # shellcheck disable=SC2086
+        py "$REPO/scripts/stretch_galaxy.py" "$WORK/${BASE}.fits" "$NAME" "$MAJOR" "$MINOR" "$PA" "$RA" "$DEC" \
+            $STRETCH_OPTS --skydn=0 --skychroma=0 --chroma=0 --lumsmooth=0 "--tag=${TAG}_nodn" 2>&1 |
+            grep -E "saved"
+    fi
+fi
+
+stop_after 6
+# ---------------------------------------------------------------- 7. report
+if [ "$FIRST" -le 7 ] && [ "$REPORT" = 1 ]; then
+    cat > "$S/7_stars.ssf" <<EOF
+requires 1.4.0
+cd "$WORK"
+# star sizes on the stack (before noise reduction); default detection, not the sensitive one used for registration
+load ${NAME}_linear
+setfindstar reset
+findstar -out=$WORK/${NAME}_stars.lst
+EOF
+    run_siril 7_stars
+    grep -E "Found .* stars" "$S/7_stars.log" || true
+    echo "--- report"
+    export NAME LIGHTS LIGHTS_SKIP DARKS MASTER_DARK FLATS MASTER_FLAT DARKFLATS LIGHT_BIAS HOT_DARK FOCAL KEEP_BEST SOLVE BG \
+        BG_RESIDUAL GALAXIES_EXTRA DECONV DECONV_ITERS DENOISE_MOD NODENOISE STRETCH_OPTS
+    export TITLE="${TITLE:-}" ABOUT="${ABOUT:-}" TELESCOPE="${TELESCOPE:-}" CAMERA="${CAMERA:-}" \
+        REPORT_LANG="${REPORT_LANG:-uk}"
+    py "$REPO/scripts/report.py" "$WORK" "$NAME" "$TAG" 2>&1 | grep -v -i -E "warn|RADECSYS"
 fi
 echo "done: $WORK/final/"

@@ -1,7 +1,8 @@
 """Remove vignetting and gradient from a linear RGB stack taken without flats, keeping a large galaxy's faint halo.
 
-Run:  ~/iss/.venv/bin/python -I vignette_bg.py <in.fits> <out.fits> --gal=RA,DEC,major',minor',PA [--galmask=1.3]
-      [--cmax=0.4]  (how far the vignetting centre may sit from the frame centre, in frame widths; 0 = fixed)
+Run:  ~/iss/.venv/bin/python -I vignette_bg.py <in.fits> <out.fits> --gal=RA,DEC,major',minor',PA [--gal=...]
+      [--galmask=1.3] [--cmax=0.4]  (how far the vignetting centre may sit from the frame centre, in frame widths;
+      0 = fixed). Give --gal once per galaxy in the field: all are kept out of the sky samples.
 Input: linear RGB FITS (3, H, W) with a WCS (plate solved). Output: float32 0..1, header kept.
 
 Siril's polynomial subsky cannot follow strong vignetting and, when the galaxy fills much of the field, some of its
@@ -23,9 +24,13 @@ import astropy.units as au
 from scipy.optimize import least_squares
 
 opts = {"gal": None, "galmask": "1.3", "cmax": "0.4"}
+gals = []
 args = []
 for a in sys.argv[1:]:
-    if a.startswith("--") and a[2:].split("=")[0] in opts:
+    if a.startswith("--gal="):
+        gals.append(a[6:])
+        opts["gal"] = gals[0]
+    elif a.startswith("--") and a[2:].split("=")[0] in opts:
         k, v = a[2:].split("=", 1)
         opts[k] = v
     else:
@@ -42,16 +47,19 @@ if np.issubdtype(raw.dtype, np.integer):
 del raw
 _, H, W = img.shape
 
-# --- galaxy ellipse in pixels
-ra, dec, major, minor, pa = opts["gal"].split(",")
+# --- galaxy ellipses in pixels
 wcs = WCS(hdr, naxis=2)
 scale = proj_plane_pixel_scales(wcs).mean() * 3600
-gal = SkyCoord(ra, dec, unit=("hourangle", "deg"))
-gx, gy = wcs.world_to_pixel(gal)
-ax, ay = wcs.world_to_pixel(gal.directional_offset_by(float(pa) * au.deg, 0.01 * au.deg))
-th = np.arctan2(ay - gy, ax - gx)
 k = float(opts["galmask"])
-a_px, b_px = k * float(major) * 60 / scale / 2, k * float(minor) * 60 / scale / 2
+ellipses = []
+for g in gals:
+    ra, dec, major, minor, pa = g.split(",")
+    gal = SkyCoord(ra, dec, unit=("hourangle", "deg"))
+    gx, gy = wcs.world_to_pixel(gal)
+    ax, ay = wcs.world_to_pixel(gal.directional_offset_by(float(pa) * au.deg, 0.01 * au.deg))
+    ellipses.append((gx, gy, np.arctan2(ay - gy, ax - gx),
+                     k * float(major) * 60 / scale / 2, k * float(minor) * 60 / scale / 2))
+a_px, b_px = ellipses[0][3], ellipses[0][4]
 
 # --- block medians (16 px) as sky samples
 B = 16
@@ -59,10 +67,12 @@ h, w = H // B, W // B
 blocks = img[:, :h * B, :w * B].reshape(3, h, B, w, B)
 med = np.median(blocks, axis=(2, 4))                      # (3, h, w)
 yc, xc = (np.mgrid[0:h, 0:w] + 0.5) * B - 0.5
-u = (xc - gx) * np.cos(th) + (yc - gy) * np.sin(th)
-v = -(xc - gx) * np.sin(th) + (yc - gy) * np.cos(th)
+ok = np.ones((h, w), bool)
+for gx, gy, th, ga, gb in ellipses:
+    u = (xc - gx) * np.cos(th) + (yc - gy) * np.sin(th)
+    v = -(xc - gx) * np.sin(th) + (yc - gy) * np.cos(th)
+    ok &= (u / ga) ** 2 + (v / gb) ** 2 > 1
 edge = 2                                                  # stacking edges
-ok = ((u / a_px) ** 2 + (v / b_px) ** 2 > 1)
 ok[:edge] = ok[-edge:] = False
 ok[:, :edge] = ok[:, -edge:] = False
 lum = med.sum(0)
@@ -100,7 +110,8 @@ for _ in range(3):                                        # re-clip around the f
     s = 1.4826 * np.median(np.abs(res[m] - np.median(res[m])))
     m = ok & (np.abs(res) < 2.5 * s)
 print(f"vignetting centre ({(cx + 0.5) * W:.0f}, {(cy + 0.5) * H:.0f}) px, {m.sum()} sky samples "
-      f"({100 * m.sum() / m.size:.0f} % of blocks), galaxy ellipse {2 * a_px:.0f} x {2 * b_px:.0f} px")
+      f"({100 * m.sum() / m.size:.0f} % of blocks), galaxy ellipse {2 * a_px:.0f} x {2 * b_px:.0f} px"
+      + (f" (+{len(ellipses) - 1} more galaxies masked)" if len(ellipses) > 1 else ""))
 
 # --- per channel model at full resolution, subtracted keeping the median level
 yy, xx = np.mgrid[0:H, 0:W]

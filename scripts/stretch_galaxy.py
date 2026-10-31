@@ -9,7 +9,10 @@ relying on Siril's subsky), --black=2.2 (black point in sky sigmas below the sky
 in the output), --chroma=2.5 (colour-noise smoothing everywhere, px; 0 = off),
 --lumsmooth=1.3 (luminance smoothing in faint areas, px; 0 = off), --tag=<suffix>,
 --galmask=1.9,3.0 (galaxy mask = these multiples of the major, minor axis; kept off the sky and the white-balance
-stars. Use ~1.0,1.3 for a galaxy that fills much of the field, e.g. M81).
+stars. Use ~1.0,1.3 for a galaxy that fills much of the field, e.g. M81), --sat=1.35 (colour saturation),
+--clipped=white (star centres clipped in the camera made neutral; off = leave them, the white balance then tints
+them pale or pink), --highlight=white (colours fade to white above the white point, so bright star cores look
+like in a photograph: white core, colour in the halo; hue = keep full colour up to the brightest pixel).
 Sky-only options (masked off the galaxy and stars): --skydn=K wavelet (starlet, 4 scales) soft threshold at
 K x noise per scale; --skychroma=S extra colour smoothing (px); --skyflat=A (0..0.9) lowers the stretch
 contrast right at the sky level so sky noise is shown smaller.
@@ -39,7 +42,8 @@ from PIL import Image
 
 BIN = 1
 OPT = {"bg": "grid", "black": "2.2", "sky": "0.10", "lumsmooth": "1.3", "tag": "",
-       "skydn": "0", "skychroma": "0", "skyflat": "0", "chroma": "2.5", "galmask": "1.9,3.0"}
+       "skydn": "0", "skychroma": "0", "skyflat": "0", "chroma": "2.5", "galmask": "1.9,3.0", "sat": "1.35",
+       "clipped": "white", "highlight": "white"}
 args = []
 for a in sys.argv[1:]:
     if a.startswith("--bin="):
@@ -73,6 +77,9 @@ if np.issubdtype(raw.dtype, np.integer):                        # 16-bit stack (
 del raw
 H, W, _ = rgb.shape
 scale = proj_plane_pixel_scales(wcs).mean() * 3600               # arcsec/px
+# clipping levels, measured before the white balance: each channel's plateau sits at that channel's maximum
+chmax = rgb.reshape(-1, 3).max(axis=0)
+clipped = True if OPT["clipped"] == "white" else None
 
 # galaxy position: from argv, or the built-in table
 if len(sys.argv) > 7:
@@ -102,10 +109,19 @@ if not os.path.exists(gaia_cache):
     q = ("SELECT ra,dec,phot_g_mean_mag,bp_rp FROM gaiadr3.gaia_source WHERE "
          f"1=CONTAINS(POINT('ICRS',ra,dec),CIRCLE('ICRS',{centre.ra.deg:.5f},{centre.dec.deg:.5f},0.3)) "
          "AND phot_g_mean_mag<16 AND bp_rp IS NOT NULL")
-    url = "https://gea.esac.esa.int/tap-server/tap/sync?" + urllib.parse.urlencode(
-        {"REQUEST": "doQuery", "LANG": "ADQL", "FORMAT": "csv", "QUERY": q})
+    params = urllib.parse.urlencode({"REQUEST": "doQuery", "LANG": "ADQL", "FORMAT": "csv", "QUERY": q})
+    # ESA's Gaia archive first, the Heidelberg (ARI) mirror when it is down (it timed out on 31 Oct 2026)
+    servers = ["https://gea.esac.esa.int/tap-server/tap/sync", "https://gaia.ari.uni-heidelberg.de/tap/sync"]
+    for i, srv in enumerate(servers):
+        try:
+            data = urllib.request.urlopen(f"{srv}?{params}", timeout=60).read()
+            break
+        except OSError as e:
+            print(f"Gaia query failed at {srv} ({e})" + ("" if i + 1 == len(servers) else ", trying the next server"))
+    else:
+        sys.exit("no Gaia server answered: rerun later (only the stretch step is needed)")
     with open(gaia_cache, "wb") as fh:
-        fh.write(urllib.request.urlopen(url, timeout=120).read())
+        fh.write(data)
 cat = np.genfromtxt(gaia_cache, delimiter=",", names=True)
 spx, spy = wcs.world_to_pixel(SkyCoord(cat["ra"], cat["dec"], unit="deg"))
 R, R1, R2 = 10, 15, 22
@@ -140,6 +156,22 @@ offs = np.median(cents - cents[:, 1:2, :], axis=0)
 for k in (0, 2):
     rgb[..., k] = nd.shift(rgb[..., k], -offs[k], order=3, mode="nearest")
 print("channel shift (dy, dx px): R", offs[0].round(2), " B", offs[2].round(2))
+
+# --- 0c'. pixels clipped in the camera: neutral (--clipped) ---
+# Their colour is lost, and the white balance would tint the channels' different plateaus (pale/pink centres).
+# Like a raw converter's highlight handling they become neutral at the brightest channel's level, fading in
+# from half the clipping level (clipped in some frames) to full white at 90 %.
+if clipped is not None:
+    frac = (rgb / (chmax * wb)).max(axis=2)
+    w = np.clip((frac - 0.5) / 0.4, 0, 1)
+    lab, n = nd.label(w > 0)
+    big = [i for i, sl in enumerate(nd.find_objects(lab), 1) if (lab[sl] == i).sum() > 3000]
+    if big:
+        w[np.isin(lab, big)] = 0                                     # a saturated galaxy core: leave it
+    w = nd.gaussian_filter(w, 1.0)[..., None]
+    rgb = rgb * (1 - w) + rgb.max(axis=2, keepdims=True) * w
+    print(f"clipped star centres made neutral: {n - len(big)}")
+    del clipped, frac, w, lab
 
 
 def sky_noise(img):
@@ -224,9 +256,22 @@ sky = ~mask
 sigma = 1.4826 * np.median(np.abs(lum[sky] - np.median(lum[sky])))
 
 # --- 2. noise reduction ---
-chroma = rgb - lum[..., None]
+# Colour is smoothed as brightness-weighted ratios (colour = blur(rgb) / blur(lum)), not as differences rgb - lum:
+# blurring differences across a bright star's steep profile moves the core's colour excess into the halo (pale
+# centre inside an over-saturated ring). A pedestal of a few sky sigmas keeps the ratios stable in the sky.
+ped = max(0.0, -float(np.median(lum[sky]))) + 3 * sigma
+
+
+def colour_smooth(img, lum_, s):
+    num = np.dstack([nd.gaussian_filter(img[..., c] + ped, s) for c in range(3)])
+    ratio = num / np.maximum(nd.gaussian_filter(lum_ + ped, s), 1e-12)[..., None]
+    return ratio / np.maximum(ratio.mean(axis=2, keepdims=True), 1e-12)   # mean 1: brightness untouched
+
+
+ratio = (rgb + ped) / np.maximum(lum + ped, 1e-12)[..., None]
 if float(OPT["chroma"]) > 0:                                     # --chroma=0: no colour-noise smoothing
-    chroma = np.dstack([nd.gaussian_filter(chroma[..., c], px(float(OPT["chroma"]))) for c in range(3)])
+    ratio = colour_smooth(rgb, lum, px(float(OPT["chroma"])))
+rgb_in = rgb
 snr = nd.gaussian_filter(lum, px(2)) / sigma
 w_smooth = np.clip(1 - (snr - 1) / 6, 0, 1)                       # 1 in the sky, 0 on real signal
 ls = float(OPT['lumsmooth'])
@@ -252,9 +297,10 @@ if K > 0:
     lum = w_sky * lum_dn + (1 - w_sky) * lum
 SC = float(OPT["skychroma"])
 if SC > 0:
-    chroma_s = np.dstack([nd.gaussian_filter(chroma[..., c_], px(SC)) for c_ in range(3)])
-    chroma = w_sky[..., None] * chroma_s + (1 - w_sky[..., None]) * chroma
-rgb = lum[..., None] + chroma
+    ratio_s = colour_smooth(rgb_in, rgb_in.mean(axis=2), px(SC))
+    ratio = w_sky[..., None] * ratio_s + (1 - w_sky[..., None]) * ratio
+rgb = (lum + ped)[..., None] * ratio - ped
+del rgb_in
 
 # --- 3. stretch ---
 black = -float(OPT['black']) * sigma
@@ -283,9 +329,13 @@ if A > 0:
 
 out = np.clip(rgb - black, 0, None) * (L / x)[..., None]
 l2 = out.mean(axis=2, keepdims=True)
-out = np.clip(l2 + 1.35 * (out - l2), 0, None)                   # saturation, hue kept
+out = np.clip(l2 + float(OPT["sat"]) * (out - l2), 0, None)      # saturation (--sat, default 1.35), hue kept
 m = out.max(axis=2, keepdims=True)
-out = np.where(m > 1, out / m, out)
+if OPT["highlight"] == "white":           # like a photograph: colours fade to white from 90 % of white upwards
+    k = np.clip((m - 0.9) / 1.1, 0, 1) ** 0.7                         #   0 below 0.9, white from 2x the white point
+    out = out / np.maximum(m, 1) * (1 - k) + np.minimum(m, 1) * k
+else:
+    out = np.where(m > 1, out / m, out)
 
 # --- 4. orientation: north up, east left ---
 img = out[::-1]                                                    # display rows top-down
