@@ -59,6 +59,27 @@ for f in lights:
     except OSError:
         pass
 n_lights = len(lights) or len(raw_files(env("LIGHTS")))
+# camera raw files (DSLR): what the EXIF holds instead (times are the camera clock, not necessarily UTC)
+iso, camclock = None, False
+if not hdrs and n_lights:
+    from PIL import Image, ExifTags
+    TAG = {v: k for k, v in ExifTags.TAGS.items()}
+    for f in raw_files(env("LIGHTS")):
+        try:
+            e = Image.open(f).getexif()
+        except Exception:
+            continue
+        sub = e.get_ifd(0x8769)
+        h = {}
+        if sub.get(TAG["ExposureTime"]):
+            h["EXPTIME"] = float(sub[TAG["ExposureTime"]])
+        if sub.get(TAG["DateTimeOriginal"]):
+            h["DATE-OBS"] = sub[TAG["DateTimeOriginal"]].replace(":", "-", 2).replace(" ", "T")
+            camclock = True
+        iso = sub.get(TAG["ISOSpeedRatings"], iso)
+        if e.get(TAG["Model"]):
+            h["INSTRUME"] = e[TAG["Model"]].strip()
+        hdrs.append(h)
 skip = set()                                                     # LIGHTS_SKIP: positions in file-name order, from 1
 for r in (env("LIGHTS_SKIP") or "").split():
     a, _, b = r.partition("-")
@@ -82,6 +103,7 @@ for h in hdrs:
         temps.append(float(h["CCD-TEMP"]))
     if h.get("OBJCTALT") is not None:
         alts.append(float(h["OBJCTALT"]))
+times.sort()
 focal = hdrs[0].get("FOCALLEN") if hdrs else None
 focal = float(focal) if focal else float(env("FOCAL") or 0) or None
 
@@ -120,7 +142,7 @@ stars = np.array(stars)
 LANG = env("REPORT_LANG") or "uk"
 T = {
     "en": dict(
-        acq="Acquisition", date="Date", alt="altitude", tel="Telescope", cam="camera", sensor="sensor",
+        acq="Acquisition", date="Date", camclock="(camera clock)", alt="altitude", tel="Telescope", cam="camera", sensor="sensor",
         newt="150/750 Newtonian", lights="Lights", s="s", minute="min", left_out="{n} left out",
         no_dark_exp=" (no darks at their exposure)", gain="gain", offset="offset", stacked="{n} stacked",
         cal="Calibration", darks="{n} {w}", w_dark=("dark", "darks", "darks"), mdark="master dark from an earlier night",
@@ -134,7 +156,7 @@ T = {
         stack="Calibration, registration and stacking in Siril: winsorized sigma rejection, frames weighted by star "
               "sharpness", keep=", sharpest {k} kept",
         bg="Background", bg_poly="2nd-degree polynomial gradient removal (Siril)",
-        bg_radial="vignetting model (radial) + linear gradient", bg_none="no gradient removal",
+        bg_radial="vignetting model (radial) + linear gradient", bg_none="no gradient model, only a constant sky level",
         bg_res=", then a smooth residual model ({p} px)", bg_mask="; the target{x} masked",
         bg_mask_x=" and the other galaxies in the field",
         solve="Plate solving", deconv="Deconvolution: Richardson-Lucy, {n} {w}, on the galaxy only", w_iter=("iteration", "iterations", "iterations"),
@@ -149,7 +171,7 @@ T = {
         months=["January", "February", "March", "April", "May", "June", "July", "August", "September", "October",
                 "November", "December"]),
     "uk": dict(
-        acq="Зйомка", date="Дата", alt="висота", tel="Телескоп", cam="камера", sensor="сенсор",
+        acq="Зйомка", date="Дата", camclock="(за годинником камери)", alt="висота", tel="Телескоп", cam="камера", sensor="сенсор",
         newt="Ньютон 150/750", lights="Кадри", s="с", minute="хв", left_out="{n} не використано",
         no_dark_exp=" (немає дарків для цієї витримки)", gain="гейн", offset="офсет", stacked="у стек {n}",
         cal="Калібрування", darks="{n} {w}", w_dark=("дарк", "дарки", "дарків"), mdark="майстер-дарк з іншої ночі",
@@ -163,7 +185,7 @@ T = {
         stack="Калібрування, вирівнювання та складання в Siril: вінзоризоване сигма-відкидання, кадри зважені за "
               "різкістю зірок", keep=", залишено {k} найрізкіших",
         bg="Фон", bg_poly="видалення градієнта поліномом 2-го ступеня (Siril)",
-        bg_radial="модель віньєтування (радіальна) + лінійний градієнт", bg_none="без видалення градієнта",
+        bg_radial="модель віньєтування (радіальна) + лінійний градієнт", bg_none="без моделі градієнта, лише сталий рівень неба",
         bg_res=", потім гладка модель залишку ({p} пкс)", bg_mask="; ціль{x} замасковано",
         bg_mask_x=" та інші галактики в полі",
         solve="Астрометрія", deconv="Деконволюція: Річардсон–Люсі, {n} {w}, лише на галактиці", w_iter=("ітерація", "ітерації", "ітерацій"),
@@ -214,7 +236,7 @@ if env("ABOUT"):
 
 lines.append(f"**{T['acq']}**")
 if times:
-    t = f"- {T['date']}: {day(times[0])}, {times[0]:%H:%M}–{max(times):%H:%M} UTC"
+    t = f"- {T['date']}: {day(times[0])}, {times[0]:%H:%M}–{max(times):%H:%M} " + (T["camclock"] if camclock else "UTC")
     if alts:
         t += f", {T['alt']} {alts[0]:.0f}° → {alts[-1]:.0f}°"
     lines.append(t)
@@ -233,6 +255,8 @@ if n_lights:
         t += ", " + T["left_out"].format(n=len(skip)) + (T["no_dark_exp"] if len(groups) > 1 else "")
     if gain is not None:
         t += f", {T['gain']} {gain:g}" + (f" ({T['offset']} {offset:g})" if offset is not None else "")
+    elif iso:
+        t += f", ISO {iso}"
     if n_stacked:
         t += "; " + T["stacked"].format(n=n_stacked) + (f" = {n_stacked * exp / 60:.0f} {T['minute']}" if exp else "")
     lines.append(t)
