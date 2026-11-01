@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Deep-sky galaxy pipeline: calibrate, stack, deconvolve, denoise, stretch.
 #
-#   ./process.sh sessions/<session>.conf [first step] [last step]
+#   ./process.sh <session folder>/<date>_<name>.conf [first step] [last step]
 #
 # Steps (start later with the step number, e.g. "5" to only redo the stretch):
 #   1 masters   master dark, dark-flat, flat                      (Siril)
@@ -15,7 +15,7 @@
 set -euo pipefail
 
 REPO=$(cd "$(dirname "$0")" && pwd)
-CONF=${1:?usage: ./process.sh sessions/<session>.conf [first step] [last step]}
+CONF=${1:?usage: ./process.sh <session folder>/<date>_<name>.conf [first step] [last step]}
 FIRST=${2:-1}
 LAST=${3:-7}
 # shellcheck source=/dev/null

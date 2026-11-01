@@ -4,15 +4,17 @@ Deep-sky galaxy processing for the ASI290MC on the 150/750 Newtonian: from raw E
 north-up image with one command. Classical math only (calibration, Richardson-Lucy, NL-Bayes, wavelets,
 curves), no AI tools.
 
-First result: NGC 6503, 25 Oct 2026 (`sessions/2026-10-25_ngc6503.conf`, notes in `docs/ngc6503-2026-10-25.md`).
+First result: NGC 6503, 25 Oct 2026 (`Transcend/Astrophoto/deepsky/2026/ngc6503/2026-10-25/2026-10-25_ngc6503.conf`, notes
+in `docs/ngc6503-2026-10-25.md`).
 
 
 ## Quick start
 
 ```bash
-cp sessions/2026-10-25_ngc6503.conf sessions/<date>_<target>.conf   # edit paths and the galaxy's numbers
-./process.sh sessions/<date>_<target>.conf          # all steps, ~5-8 minutes
-./process.sh sessions/<date>_<target>.conf 6        # only redo the stretch (e.g. after changing STRETCH_OPTS)
+S=/media/vsulym/Transcend/Astrophoto/deepsky/2026      # session files live in the session folders, next to the data
+cp $S/ngc5907/2026-10-30_ngc5907.conf $S/<target>/<date>_<target>.conf   # edit paths and the galaxy's numbers
+./process.sh $S/<target>/<date>_<target>.conf       # all steps, ~5-8 minutes
+./process.sh $S/<target>/<date>_<target>.conf 6     # only redo the stretch (e.g. after changing STRETCH_OPTS)
 ```
 
 Result: `<WORK>/final/<NAME>_final_field.png` (north up, east left) and `<NAME>_final_crop_2x.png`, and the
@@ -70,7 +72,8 @@ for i in $(seq 1 58); do n=$(printf %03d $i); ln -sf ../Light/NGC_6503_Light_$n.
 
 ## Session file
 
-A shell file with `NAME=value` lines (see `sessions/`). Required:
+A shell file with `NAME=value` lines, kept in the session folder next to the frames and `work/`, named
+`<date>_<name>.conf` (until 1 Nov 2026 they were in `sessions/` here; git history has those versions). Required:
 
 - `NAME`: short name for output files, e.g. `ngc6503`
 - `LIGHTS`: folder with the lights (or links to them)
@@ -222,6 +225,5 @@ and registration correlate neighbouring pixels, so it is not used.
 - `process.sh`: the pipeline
 - `scripts/deconv_galaxy.py`, `scripts/stretch_galaxy.py`, `scripts/align_wcs.py`, `scripts/vignette_bg.py`,
   `scripts/bg_residual.py`, `scripts/report.py`: the Python steps (each has its usage in its first lines and runs on its own too)
-- `sessions/*.conf`: one file per session/target
 - `tools/flat_panel.html`: white screen for flats
 - `docs/`: notes per session
